@@ -1,8 +1,9 @@
-from numpy.typing import NDArray
 import pandas as pd
 import numpy as np
-from pathlib import Path
 import matplotlib.pyplot as plt
+from pathlib import Path
+from numpy.typing import NDArray
+from itertools import product
 
 class Perceptron: 
     weights: NDArray
@@ -29,15 +30,10 @@ class Perceptron:
     def get_delta(self, learning_rate, error, x):
         return learning_rate * error * x
 
-    def plot_error(self, classification_error):
-        plt.plot(classification_error)
-        plt.xlabel('Epochs')
-        plt.ylabel('Classification Error')
-        plt.title('Classification Error over Epochs')
-        plt.savefig(f'classification_error_{self.name}.png')
-        plt.show()
-
-    def plot_decision_boundary(self, x, labels, step: str = "train"):
+    def plot_decision_boundary(self, x, labels, step: str = "train"): 
+        if len(self.weights) > 3:
+            print(f"Skipping decision boundary plot for {self.name}: Data is {len(self.weights)-1}D.")
+            return
         x_min, x_max = x.iloc[:, 1].min() - 1, x.iloc[:, 1].max() + 1
         y_min, y_max = x.iloc[:, 2].min() - 1, x.iloc[:, 2].max() + 1
         xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.01), np.arange(y_min, y_max, 0.01))
@@ -51,6 +47,20 @@ class Perceptron:
         plt.title(f'Decision Boundary of {self.name}')
         plt.savefig(f'../assets/output/{step}_decision_boundary_{self.name}.png')
         plt.show()
+        plt.close()
+
+    def plot_error(self, classification_error):
+        # Cria uma nova figura limpa para este gráfico específico
+        plt.figure() 
+        
+        plt.plot(classification_error, color='blue')
+        plt.xlabel('Épocas')
+        plt.ylabel('Erro de Classificação')
+        plt.title(f'Erro de Classificação x Época\n({self.name})')
+        plt.tight_layout()
+        plt.savefig(f'../assets/output/erro_{self.name}.png')
+        plt.show() 
+        plt.close()
 
     def train(self, data: pd.DataFrame, learning_rate=0.01, epochs=1000, seed=42):
         labels = data['label']
@@ -93,28 +103,41 @@ class Perceptron:
             if labels.iloc[i] - y != 0: 
                 error += 1
 
-        print(f"Test Predictions: {preds}")
-        print(f"Test Error: {error / len(data)}")
         print(f"Test Accuracy: {1 - (error / len(data))}")
         self.plot_decision_boundary(x, labels, step="test")
         return
 
 
 if __name__ == "__main__": 
-    models = [Perceptron(str(i)) for i in range(3)]
+    models = [Perceptron(f"Perceptron_{str(i)}") for i in range(3)]
     hyperparams = {"epochs": 100, "LR": 0.1, "seed": 42}
     
     try:
-        if not Path("../assets").exists(): 
-            raise Exception("Assets path does not exist")
-        for i in range(1, 3):
-            model = models[i]
-            print("--- Training ---")
-            df = model.preprocess(Path(f"../assets/train_dataset{i}.csv"))
-            model.train(df, hyperparams["LR"], hyperparams["epochs"], hyperparams["seed"])
-            print("\n--- Testing ---")
-            df_test = model.preprocess(Path(f"../assets/test_dataset{i}.csv"))
-            model.test(df_test)
+        for i in range(1, 4):
+            model = models[i - 1]
+            train_path = Path(f"../assets/train_dataset{i}.csv")
+            test_path = Path(f"../assets/test_dataset{i}.csv")
+
+            if not train_path.exists() or not test_path.exists(): 
+                raise FileExistsError("Train or Test dataset does not exist")
+
+            df = model.preprocess(train_path)
+            df_test = model.preprocess(test_path)
+            if i != 3:
+                print("--- Training ---")
+                model.train(df, hyperparams["LR"], hyperparams["epochs"], hyperparams["seed"])
+                print("\n--- Testing ---")
+                model.test(df_test)
+
+            if i == 3: 
+                learning_rates = [0.1, 0.001, 0.0001]
+                epochs = [100, 200]
+                for (lr, epoch) in product(learning_rates, epochs): 
+                    model = Perceptron(f"Perceptron_LR{lr}_Epoch{epoch}")
+                    print(f"\n--- Training with LR: {lr}, Epochs: {epoch} ---")
+                    model.train(df, lr, epoch, hyperparams["seed"])
+                    print("\n--- Testing ---")
+                    model.test(df_test)
 
     except KeyboardInterrupt:
         print("Exiting...")
