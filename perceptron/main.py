@@ -34,7 +34,7 @@ class Perceptron:
         plt.xlabel('Epochs')
         plt.ylabel('Classification Error')
         plt.title('Classification Error over Epochs')
-        plt.savefig('classification_error_{self.name}.png')
+        plt.savefig(f'classification_error_{self.name}.png')
         plt.show()
 
     def plot_decision_boundary(self, x, labels, step: str = "train"):
