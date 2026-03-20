@@ -5,11 +5,11 @@ from pathlib import Path
 from numpy.typing import NDArray
 from itertools import product
 
-class Perceptron: 
+class Adaline: 
     weights: NDArray
     name: str
 
-    def __init__(self, name: str ="Perceptron"): 
+    def __init__(self, name: str ="Adaline"): 
         self.name = name
 
     def preprocess(self, data_path: Path) -> pd.DataFrame: 
@@ -45,49 +45,83 @@ class Perceptron:
         plt.xlabel('Feature 1')
         plt.ylabel('Feature 2')
         plt.title(f'Decision Boundary of {self.name}')
-        plt.savefig(f'../assets/perceptron/{step}_decision_boundary_{self.name}.png')
+        plt.savefig(f'../assets/adaline/{step}_decision_boundary_{self.name}.png')
         plt.show()
         plt.close()
 
     def plot_error(self, classification_error):
-        # Cria uma nova figura limpa para este gráfico específico
+        # cria uma nova figura limpa para este gráfico específico
         plt.figure() 
         
         plt.plot(classification_error, color='blue')
-        plt.xlabel('Épocas')
-        plt.ylabel('Erro de Classificação')
-        plt.title(f'Erro de Classificação x Época\n({self.name})')
+        plt.xlabel('épocas')
+        plt.ylabel('erro de classificação')
+        plt.title(f'erro de classificação x época\n({self.name})')
         plt.tight_layout()
-        plt.savefig(f'../assets/perceptron/erro_{self.name}.png')
+        plt.savefig(f'../assets/adaline/erro_{self.name}.png')
         plt.show() 
         plt.close()
 
-    def train(self, data: pd.DataFrame, learning_rate=0.01, epochs=1000, seed=42):
+    def plot_eqm(self, eqms): 
+        # cria uma nova figura limpa para este gráfico específico
+        plt.figure() 
+        
+        plt.plot(eqms, color='red')
+        plt.xlabel('épocas')
+        plt.ylabel('erro quadrático médio')
+        plt.title(f'erro quadrático médio x época\n({self.name})')
+        plt.tight_layout()
+        plt.savefig(f'../assets/adaline/eqm_{self.name}.png')
+        plt.show() 
+        plt.close()
+
+    def eqm(self, x, d): 
+        w = self.weights
+        eqm = 0.0
+
+        for i in range(len(x)): 
+            u = np.dot(x.iloc[i], w)
+            eqm += ((d[i] - u) ** 2)
+
+        return eqm / len(x)
+
+    def train(self, data: pd.DataFrame, learning_rate=0.01, precision=0.01, seed=42):
         labels = data['label']
         x = data.drop('label', axis=1)
         size = len(x.columns)
         
         self.weights = np.random.default_rng(seed).random(size)
         classification_error = []
-        
-        for _ in range(epochs): 
+        epoch = 0
+        preds = []
+        eqms = [0.0]
+
+        while True: 
             count = 0
             for i in range(len(data)): 
                 u = np.dot(self.weights, x.iloc[i].values)
                 y = self.sign(u)
-                error = labels.iloc[i] - y 
-                if error != 0: 
+                error = labels.iloc[i] - u 
+                self.weights = self.weights + self.get_delta(learning_rate, error, x.iloc[i].values)
+                preds.append(y)
+                # classification_error calc
+                if labels.iloc[i] - y != 0: 
                     count += 1
                 
-                delta = self.get_delta(learning_rate, error, x.iloc[i].values)
-                self.weights = self.weights + delta
-                
             classification_error.append(count / len(data))
+            eqms.append(self.eqm(x, labels))
+            epoch += 1
+
+            if abs(eqms[-1] - eqms[-2]) < precision or epoch > 100:
+                break
+            else:
+                preds = []
 
         print(f"Final weights: {self.weights}")
-        print(f"Final Training Error: {classification_error[-1]}") 
         print(f"Final Training Accuracy: {1 - classification_error[-1]}")
+        print(f"Final eqm {eqms[-1]}")
         self.plot_error(classification_error)
+        self.plot_eqm(eqms)
         self.plot_decision_boundary(x, labels, step="train")
 
     def test(self, data):
@@ -109,8 +143,8 @@ class Perceptron:
 
 
 if __name__ == "__main__": 
-    models = [Perceptron(f"Perceptron_{str(i)}") for i in range(3)]
-    hyperparams = {"epochs": 100, "LR": 0.1, "seed": 42}
+    models = [Adaline(f"Perceptron_{str(i)}") for i in range(3)]
+    hyperparams = {"epsilon": 0.001, "LR": 0.1, "seed": 42}
     
     try:
         for i in range(1, 4):
@@ -125,17 +159,17 @@ if __name__ == "__main__":
             df_test = model.preprocess(test_path)
             if i != 3:
                 print("--- Training ---")
-                model.train(df, hyperparams["LR"], hyperparams["epochs"], hyperparams["seed"])
+                model.train(df, hyperparams["LR"], hyperparams["epsilon"], hyperparams["seed"])
                 print("\n--- Testing ---")
                 model.test(df_test)
 
             if i == 3: 
-                learning_rates = [0.1, 0.001, 0.0001]
-                epochs = [100, 200]
-                for (lr, epoch) in product(learning_rates, epochs): 
-                    model = Perceptron(f"Perceptron_LR{lr}_Epoch{epoch}")
-                    print(f"\n--- Training with LR: {lr}, Epochs: {epoch} ---")
-                    model.train(df, lr, epoch, hyperparams["seed"])
+                learning_rates = [0.01, 0.001, 0.0001]
+                epsilon = [0.1, 0.00001]
+                for (lr, precision) in product(learning_rates, epsilon): 
+                    model = Adaline(f"Perceptron_LR{lr}_Precision{precision}")
+                    print(f"\n--- Training with LR: {lr}, precision: {precision} ---")
+                    model.train(df, lr, precision, hyperparams["seed"])
                     print("\n--- Testing ---")
                     model.test(df_test)
 
