@@ -27,12 +27,10 @@ def create_ds_from_df(df: pd.DataFrame) -> torch.utils.data.TensorDataset:
     )
 
 
-# Preprocess the dataset by splitting it into train, validation, and test dataloaders.
 def preprocess(path, batch_size=32) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """Reads a CSV file and returns its train, validation and test subsets as dataloaders."""
     dataset = pd.read_csv(path)
-    # Shuffle the dataset
     dataset = dataset.sample(frac=1).reset_index(drop=True)
-    # Split the dataset into train, validation, and test sets
     train_size = int(0.7 * len(dataset))
     val_size = int(0.15 * len(dataset))
     train_df = dataset[:train_size]
@@ -43,7 +41,6 @@ def preprocess(path, batch_size=32) -> Tuple[DataLoader, DataLoader, DataLoader]
     val_ds = create_ds_from_df(val_df)
     test_ds = create_ds_from_df(test_df)
 
-    # Convert the dataframes to PyTorch dataloaders
     train_loader = torch.utils.data.DataLoader(train_ds, batch_size, shuffle=True)
     val_loader = torch.utils.data.DataLoader(val_ds, batch_size, shuffle=False)
     test_loader = torch.utils.data.DataLoader(test_ds, batch_size, shuffle=False)
@@ -54,11 +51,11 @@ def preprocess(path, batch_size=32) -> Tuple[DataLoader, DataLoader, DataLoader]
 def preprocess_know_paths(
     train_path, val_path, test_path, batch_size=32
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """Reads 3 given CSV files and returns their respective train, validation and test data as dataloaders."""
     train_df = pd.read_csv(train_path)
     val_df = pd.read_csv(val_path)
     test_df = pd.read_csv(test_path)
 
-    # create the datasets
     train_ds = create_ds_from_df(train_df)
     val_ds = create_ds_from_df(val_df)
     test_ds = create_ds_from_df(test_df)
@@ -68,9 +65,6 @@ def preprocess_know_paths(
     test_loader = torch.utils.data.DataLoader(test_ds, batch_size, shuffle=False)
 
     return train_loader, val_loader, test_loader
-
-
-
 
 
 class RegularizationType(enum.Enum):
@@ -92,8 +86,7 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
         self.name = name
         hidden_layers = self.init_hidden_layers(layers, activation_fn, regularization)
-        output_layer = self.init_output_layer(layers[-2], layers[-1])
-        hidden_layers.append(output_layer)
+        hidden_layers.append(self.init_output_layer(layers[-2], layers[-1]))
         self.layers = nn.ModuleList(hidden_layers)
         self.patience = PATIENCE
         lr = 0.01 if optimizer == SGD else 0.001
@@ -103,6 +96,7 @@ class MLP(nn.Module):
             else optimizer(self.parameters(), lr=lr)
         )
         self.criterion = nn.CrossEntropyLoss() if multiclass else nn.BCEWithLogitsLoss()
+        self.multiclass = multiclass
 
     def init_hidden_layers(
         self,
@@ -110,6 +104,7 @@ class MLP(nn.Module):
         activation_fn: nn.Module = nn.ReLU,
         regularization: RegularizationType = RegularizationType.NONE,
     ) -> List[nn.Sequential]:
+        """Initializes the hidden layers of the MLP based on the provided shape list, activation function, and regularization type."""
         hidden: List[nn.Sequential] = []
         for i in range(len(shape_list) - 2):
             input_feat = shape_list[i]
@@ -126,6 +121,7 @@ class MLP(nn.Module):
         return hidden
 
     def init_output_layer(self, in_shape, out_shape) -> nn.Sequential:
+        """Initializes the output layer of the MLP based on the provided input and output shapes."""
         return nn.Sequential(
             nn.Linear(in_shape, out_shape),
         )
@@ -142,14 +138,29 @@ class MLP(nn.Module):
         return super().eval()
 
     def plot_error(self, error, stage="train"):
+        """Plots the error over epochs and saves the plot as an image file in the assets/mlp directory."""
         plt.figure()
         plt.plot(error, color="blue", marker="o", markersize=3)
         plt.xlabel("Épocas")
         plt.ylabel("Erro de Classificação")
         plt.title(f"Erro x Época\n({self.name})")
         plt.tight_layout()
-        path = Path("assets/mlp").mkdir(parents=True, exist_ok=True)
+        path = Path("assets/mlp")
+        path.mkdir(parents=True, exist_ok=True)
         plt.savefig(path / f"{self.name}_{stage}_error_plot.png")
+        plt.close()
+
+    def plot_accuracy(self, accuracy, stage="train"):
+        """Plots the accuracy over epochs and saves the plot as an image file in the assets/mlp directory."""
+        plt.figure()
+        plt.plot(accuracy, color="green", marker="o", markersize=3)
+        plt.xlabel("Épocas")
+        plt.ylabel("Acurácia")
+        plt.title(f"Acurácia x Época\n({self.name})")
+        plt.tight_layout()
+        path = Path("assets/mlp")
+        path.mkdir(parents=True, exist_ok=True)
+        plt.savefig(path / f"{self.name}_{stage}_accuracy_plot.png")
         plt.close()
 
     def fit(
@@ -172,7 +183,11 @@ class MLP(nn.Module):
                 self.optim.zero_grad()
                 loss.backward()
                 self.optim.step()
-                acc = (torch.argmax(output, dim=1) == y).float().mean().item()
+                if self.multiclass:
+                    acc = (torch.argmax(output, dim=1) == y).float().mean().item()
+                else:
+                    acc = ((output > 0.5).squeeze() == y).float().mean().item()
+
                 epoch_loss += loss.item()
                 epoch_acc += acc
 
@@ -196,7 +211,7 @@ class MLP(nn.Module):
             print(f"Epoch {e + 1}/{epochs} completed.")
             if val_df is not None and epochs_without_improvement >= self.patience:
                 print(
-                    f"Early stopping triggered after {e + 1} epochs without improvement."
+                    f"Early stopping triggered after {epochs_without_improvement + 1} epochs without improvement."
                 )
                 break
 
@@ -284,8 +299,10 @@ def main(path):
             train_dataloader, EPOCHS, val_dataloader
         )
         m.plot_error(train_loss, stage="train")
+        m.plot_accuracy(train_acc, stage="train")
         if val_loss:
             m.plot_error(val_loss, stage="val")
+            m.plot_accuracy(val_acc, stage="val")
 
         test_loss, test_acc = m.evaluate(test_dataloader)
         print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.4f}")
