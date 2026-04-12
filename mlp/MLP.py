@@ -1,18 +1,25 @@
 import enum
+from pathlib import Path
 from typing import List, Self, Tuple
-from torch.optim import SGD
+from torch.optim import SGD, Adam
 import torch.nn as nn
 import pandas as pd
 import argparse
 import torch
 from torch.utils.data import DataLoader
+from itertools import product
+import matplotlib.pyplot as plt
+
+DROPOUT_RATE = 0.1
+L2_LAMBDA = 0.001
+PATIENCE = 20
+EPOCHS = 100
 
 
 def create_ds_from_df(df: pd.DataFrame) -> torch.utils.data.TensorDataset:
     label = df["label"].values
     if any(label < 0):
         label = (label > 0).astype(int)
-
 
     return torch.utils.data.TensorDataset(
         torch.tensor(df.drop("label", axis=1).values, dtype=torch.float32),
@@ -63,29 +70,45 @@ def preprocess_know_paths(
     return train_loader, val_loader, test_loader
 
 
+
+
+
+class RegularizationType(enum.Enum):
+    NONE = "none"
+    DROPOUT = "dropout"
+    L2 = "l2"
+
+
 class MLP(nn.Module):
     def __init__(
         self,
+        name: str,
         layers: List[torch.uint16],
-        LR=0.01,
+        optimizer=SGD,
+        activation_fn: nn.Module = nn.ReLU,
+        regularization: RegularizationType = RegularizationType.NONE,
         multiclass: bool = False,
-        patience: int = 5,
-        dropout_rate: float = 0.5,
     ) -> None:
         super(MLP, self).__init__()
-        hidden_layers = self.init_hidden_layers(layers, multiclass, dropout_rate)
+        self.name = name
+        hidden_layers = self.init_hidden_layers(layers, activation_fn, regularization)
         output_layer = self.init_output_layer(layers[-2], layers[-1])
         hidden_layers.append(output_layer)
         self.layers = nn.ModuleList(hidden_layers)
-        self.patience = patience
-        self.optim = SGD(self.parameters(), lr=LR)
+        self.patience = PATIENCE
+        lr = 0.01 if optimizer == SGD else 0.001
+        self.optim = (
+            optimizer(self.parameters(), lr=lr, weight_decay=L2_LAMBDA)
+            if regularization == RegularizationType.L2
+            else optimizer(self.parameters(), lr=lr)
+        )
         self.criterion = nn.CrossEntropyLoss() if multiclass else nn.BCEWithLogitsLoss()
 
     def init_hidden_layers(
         self,
         shape_list: List[torch.uint16],
-        multiclass: bool = False,
-        dropout_rate: float = 0.0,
+        activation_fn: nn.Module = nn.ReLU,
+        regularization: RegularizationType = RegularizationType.NONE,
     ) -> List[nn.Sequential]:
         hidden: List[nn.Sequential] = []
         for i in range(len(shape_list) - 2):
@@ -94,8 +117,10 @@ class MLP(nn.Module):
             hidden.append(
                 nn.Sequential(
                     nn.Linear(input_feat, output_feat),
-                    nn.ReLU() if not multiclass else nn.Tanh(),
-                    nn.Dropout(dropout_rate) if dropout_rate > 0 else nn.Identity(),
+                    activation_fn(),
+                    nn.Dropout(DROPOUT_RATE)
+                    if regularization == RegularizationType.DROPOUT
+                    else nn.Identity(),
                 )
             )
         return hidden
@@ -116,41 +141,83 @@ class MLP(nn.Module):
     def eval(self) -> Self:
         return super().eval()
 
+    def plot_error(self, error, stage="train"):
+        plt.figure()
+        plt.plot(error, color="blue", marker="o", markersize=3)
+        plt.xlabel("Épocas")
+        plt.ylabel("Erro de Classificação")
+        plt.title(f"Erro x Época\n({self.name})")
+        plt.tight_layout()
+        path = Path("assets/mlp").mkdir(parents=True, exist_ok=True)
+        plt.savefig(path / f"{self.name}_{stage}_error_plot.png")
+        plt.close()
+
     def fit(
         self, train_dataloader: DataLoader, epochs: int = 10, val_df: DataLoader = None
-    ):
+    ) -> Tuple[List[float], List[float], List[float], List[float]]:
         self.train()
-        loss_history = []
+        best_loss = float("inf")
+        epochs_without_improvement = 0
+        train_loss_history = []
+        train_acc_history = []
+        val_loss_history = []
+        val_acc_history = []
+
         for e in range(epochs):
+            epoch_loss = 0.0
+            epoch_acc = 0.0
             for x, y in train_dataloader:
                 output = self.forward(x)
                 loss = self.criterion(output, y)
                 self.optim.zero_grad()
                 loss.backward()
                 self.optim.step()
-                loss_history.append(loss.item())
+                acc = (torch.argmax(output, dim=1) == y).float().mean().item()
+                epoch_loss += loss.item()
+                epoch_acc += acc
+
+            epoch_loss /= len(train_dataloader)
+            epoch_acc /= len(train_dataloader)
+            train_loss_history.append(epoch_loss)
+            train_acc_history.append(epoch_acc)
 
             if val_df is not None:
-                self.evaluate(val_df)
+                val_loss, acc = self.evaluate(val_df)
+                if val_loss < best_loss:
+                    best_loss = val_loss
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
+
+                val_loss_history.append(val_loss)
+                val_acc_history.append(acc)
                 self.train()
 
+            print(f"Epoch {e + 1}/{epochs} completed.")
+            if val_df is not None and epochs_without_improvement >= self.patience:
+                print(
+                    f"Early stopping triggered after {e + 1} epochs without improvement."
+                )
+                break
 
-            print(f"Epoch {e+1}/{epochs} completed.")
+        return train_loss_history, train_acc_history, val_loss_history, val_acc_history
 
-            # TODO implement early stopping based on validation loss
-
-    def evaluate(self, data: DataLoader):
+    def evaluate(self, data: DataLoader) -> Tuple[float, float]:
+        """Returns Vaidation Loss and Accuracy"""
         self.eval()
         correct = 0
         total = 0
+        loss = 0.0
         with torch.no_grad():
             for x, y in data:
                 output = self.forward(x)
                 predicted = torch.argmax(output, dim=1)
                 total += y.shape[0]
                 correct += (predicted == y).sum().item()
+                loss += self.criterion(output, y).item()
         accuracy = correct / total
         print(f"Accuracy: {accuracy:.4f}")
+        return loss / len(data), accuracy
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         self.eval()
@@ -172,12 +239,56 @@ def main(path):
             "Invalid path input. Please provide either a single CSV file path or three CSV file paths for train, val, and test."
         )
         return
+    optimizers = [SGD, Adam]
 
-    shape_list = [train_dataloader.dataset.tensors[0].shape[1], 256, 128, 64, 32, 16, 8, train_dataloader.dataset.tensors[1].shape[0]]
-    epochs = 20
-    m = MLP(shape_list, LR=0.01, multiclass=True, patience=5, dropout_rate=0.5)
-    m.fit(train_dataloader, epochs, val_dataloader)
-    m.evaluate(test_dataloader)
+    architectures = [
+        [
+            train_dataloader.dataset.tensors[0].shape[1],
+            64,
+            len(train_dataloader.dataset.tensors[1].unique()),
+        ],
+        [
+            train_dataloader.dataset.tensors[0].shape[1],
+            128,
+            64,
+            len(train_dataloader.dataset.tensors[1].unique()),
+        ],
+        [
+            train_dataloader.dataset.tensors[0].shape[1],
+            256,
+            128,
+            64,
+            len(train_dataloader.dataset.tensors[1].unique()),
+        ],
+    ]
+
+    activ_fns = [nn.ReLU, nn.Tanh]
+    regularization_types = ["none", "dropout", "l2"]
+
+    hyperparams = product(
+        optimizers,
+        architectures,
+        activ_fns,
+        regularization_types,
+    )
+    for h in hyperparams:
+        m = MLP(
+            f"Optimizer: {h[0].__name__}, Architecture: {h[1]}, Activation: {h[2].__name__}, Regularization: {h[3]}",
+            optimizer=h[0],
+            layers=h[1],
+            activation_fn=h[2],
+            regularization=RegularizationType(h[3]),
+            multiclass=len(train_dataloader.dataset.tensors[1].unique()) > 2,
+        )
+        train_loss, train_acc, val_loss, val_acc = m.fit(
+            train_dataloader, EPOCHS, val_dataloader
+        )
+        m.plot_error(train_loss, stage="train")
+        if val_loss:
+            m.plot_error(val_loss, stage="val")
+
+        test_loss, test_acc = m.evaluate(test_dataloader)
+        print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.4f}")
 
 
 if __name__ == "__main__":
