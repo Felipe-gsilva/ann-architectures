@@ -9,9 +9,14 @@ from torch.utils.data import DataLoader
 
 
 def create_ds_from_df(df: pd.DataFrame) -> torch.utils.data.TensorDataset:
+    label = df["label"].values
+    if any(label < 0):
+        label = (label > 0).astype(int)
+
+
     return torch.utils.data.TensorDataset(
         torch.tensor(df.drop("label", axis=1).values, dtype=torch.float32),
-        torch.tensor(df["label"].values, dtype=torch.long),
+        torch.tensor(label, dtype=torch.long),
     )
 
 
@@ -72,7 +77,6 @@ class MLP(nn.Module):
         output_layer = self.init_output_layer(layers[-2], layers[-1])
         hidden_layers.append(output_layer)
         self.layers = nn.ModuleList(hidden_layers)
-        # TODO implement early stopping
         self.patience = patience
         self.optim = SGD(self.parameters(), lr=LR)
         self.criterion = nn.CrossEntropyLoss() if multiclass else nn.BCEWithLogitsLoss()
@@ -116,17 +120,24 @@ class MLP(nn.Module):
         self, train_dataloader: DataLoader, epochs: int = 10, val_df: DataLoader = None
     ):
         self.train()
-        for _ in range(epochs):
+        loss_history = []
+        for e in range(epochs):
             for x, y in train_dataloader:
                 output = self.forward(x)
                 loss = self.criterion(output, y)
                 self.optim.zero_grad()
                 loss.backward()
                 self.optim.step()
+                loss_history.append(loss.item())
 
             if val_df is not None:
                 self.evaluate(val_df)
                 self.train()
+
+
+            print(f"Epoch {e+1}/{epochs} completed.")
+
+            # TODO implement early stopping based on validation loss
 
     def evaluate(self, data: DataLoader):
         self.eval()
@@ -162,7 +173,7 @@ def main(path):
         )
         return
 
-    shape_list = [train_dataloader.dataset.tensors[0].shape[1] - 1, 64, 32, 16, 8, 4]
+    shape_list = [train_dataloader.dataset.tensors[0].shape[1], 256, 128, 64, 32, 16, 8, train_dataloader.dataset.tensors[1].shape[0]]
     epochs = 20
     m = MLP(shape_list, LR=0.01, multiclass=True, patience=5, dropout_rate=0.5)
     m.fit(train_dataloader, epochs, val_dataloader)
