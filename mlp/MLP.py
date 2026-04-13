@@ -6,9 +6,11 @@ import torch.nn as nn
 import pandas as pd
 import argparse
 import torch
+import numpy as np
 from torch.utils.data import DataLoader
 from itertools import product
 import matplotlib.pyplot as plt
+from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
 
 DROPOUT_RATE = 0.1
 L2_LAMBDA = 0.001
@@ -65,6 +67,36 @@ def preprocess_know_paths(
     test_loader = torch.utils.data.DataLoader(test_ds, batch_size, shuffle=False)
 
     return train_loader, val_loader, test_loader
+
+
+def get_metrics(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    multiclass: bool,
+) -> Tuple[float, float, float]:
+    """
+    Calculates f1 (weighted), roc_auc (weighted) and accuracy.
+
+    Args:
+        logits: raw model outputs (before softmax/sigmoid), shape (N, C) or (N, 1)
+        labels: ground-truth class indices, shape (N,)
+        multiclass: True for CrossEntropy problems, False for binary BCE
+    """
+    labels_np = labels.cpu().numpy()
+
+    if multiclass:
+        probs = torch.softmax(logits, dim=1).cpu().numpy()
+        preds = probs.argmax(axis=1)
+        auc = roc_auc_score(labels_np, probs, average="weighted", multi_class="ovr")
+    else:
+        probs = torch.sigmoid(logits).squeeze().cpu().numpy()
+        preds = (probs >= 0.5).astype(int)
+        auc = roc_auc_score(labels_np, probs, average="weighted")
+
+    f1 = f1_score(labels_np, preds, average="weighted")
+    acc = accuracy_score(labels_np, preds)
+
+    return f1, auc, acc
 
 
 class RegularizationType(enum.Enum):
@@ -131,12 +163,6 @@ class MLP(nn.Module):
             x = self.layers[i](x)
         return x
 
-    def train(self, mode: bool = True) -> Self:
-        return super().train(mode)
-
-    def eval(self) -> Self:
-        return super().eval()
-
     def plot_error(self, error, stage="train"):
         """Plots the error over epochs and saves the plot as an image file in the assets/mlp directory."""
         plt.figure()
@@ -163,10 +189,55 @@ class MLP(nn.Module):
         plt.savefig(path / f"{self.name}_{stage}_accuracy_plot.png")
         plt.close()
 
+    def plot_decision_boundary(self, data: DataLoader, stage: str = "test"):
+        """
+        Plots the decision boundary for 2-feature datasets.
+        Adapted from the Adaline implementation.
+        Only works when the input has exactly 2 features.
+        """
+        all_x = torch.cat([x for x, _ in data]).numpy()
+        all_y = torch.cat([y for _, y in data]).numpy()
+
+        if all_x.shape[1] != 2:
+            print(
+                f"Skipping decision boundary plot for {self.name}: "
+                f"Data is {all_x.shape[1]}D (requires 2D)."
+            )
+            return
+
+        x_min, x_max = all_x[:, 0].min() - 1, all_x[:, 0].max() + 1
+        y_min, y_max = all_x[:, 1].min() - 1, all_x[:, 1].max() + 1
+        xx, yy = np.meshgrid(
+            np.arange(x_min, x_max, 0.01),
+            np.arange(y_min, y_max, 0.01),
+        )
+
+        grid = torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32)
+        Z = self.predict(grid).numpy().reshape(xx.shape)
+
+        plt.figure()
+        plt.contourf(xx, yy, Z, alpha=0.8, cmap="RdYlBu")
+        plt.scatter(
+            all_x[:, 0],
+            all_x[:, 1],
+            c=all_y,
+            cmap="RdYlBu",
+            edgecolors="k",
+            marker="o",
+        )
+        plt.xlabel("Feature 1")
+        plt.ylabel("Feature 2")
+        plt.title(f"Decision Boundary\n({self.name})")
+
+        path = Path("assets/mlp")
+        path.mkdir(parents=True, exist_ok=True)
+        plt.savefig(path / f"{self.name}_{stage}_decision_boundary.png")
+        plt.close()
+
     def fit(
         self, train_dataloader: DataLoader, epochs: int = 10, val_df: DataLoader = None
     ) -> Tuple[List[float], List[float], List[float], List[float]]:
-        self.train()
+        nn.Module.train(self)
         best_loss = float("inf")
         epochs_without_improvement = 0
         train_loss_history = []
@@ -176,28 +247,32 @@ class MLP(nn.Module):
 
         for e in range(epochs):
             epoch_loss = 0.0
-            epoch_acc = 0.0
+            correct = 0
+            total = 0
             for x, y in train_dataloader:
                 output = self.forward(x)
-                loss = self.criterion(output, y)
+                y_input = y.float().unsqueeze(1) if not self.multiclass else y
+                loss = self.criterion(output, y_input)
                 self.optim.zero_grad()
                 loss.backward()
                 self.optim.step()
-                if self.multiclass:
-                    acc = (torch.argmax(output, dim=1) == y).float().mean().item()
-                else:
-                    acc = ((output > 0.5).squeeze() == y).float().mean().item()
 
+                if self.multiclass:
+                    preds = torch.argmax(output, dim=1)
+                else:
+                    preds = (torch.sigmoid(output) >= 0.5).squeeze().long()
+
+                correct += (preds == y).sum().item()
+                total += y.size(0)
                 epoch_loss += loss.item()
-                epoch_acc += acc
 
             epoch_loss /= len(train_dataloader)
-            epoch_acc /= len(train_dataloader)
+            epoch_acc = correct / total
             train_loss_history.append(epoch_loss)
             train_acc_history.append(epoch_acc)
 
             if val_df is not None:
-                val_loss, acc = self.evaluate(val_df)
+                val_loss, val_acc, _ = self.evaluate(val_df)
                 if val_loss < best_loss:
                     best_loss = val_loss
                     epochs_without_improvement = 0
@@ -205,11 +280,11 @@ class MLP(nn.Module):
                     epochs_without_improvement += 1
 
                 val_loss_history.append(val_loss)
-                val_acc_history.append(acc)
-                self.train()
+                val_acc_history.append(val_acc)
+                nn.Module.train(self)
 
             print(f"Epoch {e + 1}/{epochs} completed.")
-            if val_df is not None and epochs_without_improvement >= self.patience:
+            if epochs_without_improvement >= self.patience:
                 print(
                     f"Early stopping triggered after {epochs_without_improvement + 1} epochs without improvement."
                 )
@@ -217,32 +292,42 @@ class MLP(nn.Module):
 
         return train_loss_history, train_acc_history, val_loss_history, val_acc_history
 
-    def evaluate(self, data: DataLoader) -> Tuple[float, float]:
-        """Returns Vaidation Loss and Accuracy"""
+    def evaluate(self, data: DataLoader) -> Tuple[float, float, Tuple]:
+        """Returns loss, accuracy and extended metrics (f1, auc, acc)."""
         self.eval()
-        correct = 0
-        total = 0
+        all_logits = []
+        all_labels = []
         loss = 0.0
+
         with torch.no_grad():
             for x, y in data:
                 output = self.forward(x)
-                predicted = torch.argmax(output, dim=1)
-                total += y.shape[0]
-                correct += (predicted == y).sum().item()
-                loss += self.criterion(output, y).item()
-        accuracy = correct / total
-        print(f"Accuracy: {accuracy:.4f}")
-        return loss / len(data), accuracy
+                y_input = y.float().unsqueeze(1) if not self.multiclass else y
+                loss += self.criterion(output, y_input).item()
+                all_logits.append(output)
+                all_labels.append(y)
+
+        all_logits = torch.cat(all_logits)
+        all_labels = torch.cat(all_labels)
+
+        f1, auc, acc = get_metrics(all_logits, all_labels, self.multiclass)
+        avg_loss = loss / len(data)
+
+        print(f"Accuracy: {acc:.4f} | F1: {f1:.4f} | AUC: {auc:.4f}")
+        return avg_loss, acc, (f1, auc, acc)
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         self.eval()
         with torch.no_grad():
             output = self.forward(x)
-            predicted = torch.argmax(output, dim=1)
+            if self.multiclass:
+                predicted = torch.argmax(output, dim=1)
+            else:
+                predicted = (torch.sigmoid(output) >= 0.5).squeeze().long()
         return predicted
 
 
-def main(path):
+def main(path: str | List[str], batch_size=32):
     if isinstance(path, list) and len(path) == 3:
         (train_dataloader, val_dataloader, test_dataloader) = preprocess_know_paths(
             *path
@@ -254,46 +339,36 @@ def main(path):
             "Invalid path input. Please provide either a single CSV file path or three CSV file paths for train, val, and test."
         )
         return
-    optimizers = [SGD, Adam]
-
-    architectures = [
-        [
-            train_dataloader.dataset.tensors[0].shape[1],
-            64,
-            len(train_dataloader.dataset.tensors[1].unique()),
-        ],
-        [
-            train_dataloader.dataset.tensors[0].shape[1],
-            128,
-            64,
-            len(train_dataloader.dataset.tensors[1].unique()),
-        ],
-        [
-            train_dataloader.dataset.tensors[0].shape[1],
-            256,
-            128,
-            64,
-            len(train_dataloader.dataset.tensors[1].unique()),
-        ],
-    ]
 
     activ_fns = [nn.ReLU, nn.Tanh]
     regularization_types = ["none", "dropout", "l2"]
+    num_classes = len(train_dataloader.dataset.tensors[1].unique())
+    is_multiclass = num_classes > 2
+    output_size = num_classes if is_multiclass else 1
 
-    hyperparams = product(
-        optimizers,
-        architectures,
-        activ_fns,
-        regularization_types,
-    )
+    optimizers = [SGD, Adam]
+
+    architectures = [
+        [train_dataloader.dataset.tensors[0].shape[1], 64, output_size],
+        [train_dataloader.dataset.tensors[0].shape[1], 128, 64, output_size],
+        [train_dataloader.dataset.tensors[0].shape[1], 256, 128, 64, output_size],
+    ]
+
+    results = []
+    hyperparams = product(optimizers, architectures, activ_fns, regularization_types)
+
     for h in hyperparams:
+        model_name = (
+            f"Optimizer-{h[0].__name__}_Arch-{len(h[1]) - 2}hidden"
+            f"_Act-{h[2].__name__}_Reg-{h[3]}"
+        )
         m = MLP(
-            f"Optimizer: {h[0].__name__}, Architecture: {h[1]}, Activation: {h[2].__name__}, Regularization: {h[3]}",
+            model_name,
             optimizer=h[0],
             layers=h[1],
             activation_fn=h[2],
             regularization=RegularizationType(h[3]),
-            multiclass=len(train_dataloader.dataset.tensors[1].unique()) > 2,
+            multiclass=is_multiclass,
         )
         train_loss, train_acc, val_loss, val_acc = m.fit(
             train_dataloader, EPOCHS, val_dataloader
@@ -304,8 +379,34 @@ def main(path):
             m.plot_error(val_loss, stage="val")
             m.plot_accuracy(val_acc, stage="val")
 
-        test_loss, test_acc = m.evaluate(test_dataloader)
-        print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.4f}")
+        # decision boundary (only plots if data is 2D)
+        m.plot_decision_boundary(test_dataloader, stage="test")
+
+        test_loss, test_acc, (f1, auc, acc) = m.evaluate(test_dataloader)
+        print(
+            f"Test Loss: {test_loss:.4f} | Accuracy: {acc:.4f} | F1: {f1:.4f} | AUC: {auc:.4f}"
+        )
+
+        results.append(
+            {
+                "model": model_name,
+                "optimizer": h[0].__name__,
+                "architecture": str(h[1]),
+                "activation": h[2].__name__,
+                "regularization": h[3],
+                "test_loss": round(test_loss, 4),
+                "test_acc": round(test_acc, 4),
+                "test_f1": round(f1, 4),
+                "test_auc": round(auc, 4),
+            }
+        )
+
+    # save comparison table
+    results_df = pd.DataFrame(results)
+    out_path = Path("assets/mlp")
+    out_path.mkdir(parents=True, exist_ok=True)
+    results_df.to_csv(out_path / "results.csv", index=False)
+    print(f"\nResults saved to {out_path / 'results.csv'}")
 
 
 if __name__ == "__main__":
@@ -314,7 +415,40 @@ if __name__ == "__main__":
     parser.add_argument(
         "--list_path", nargs=3, help="Paths to the train, val, and test CSV files."
     )
+    parser.add_argument(
+        "--tests", action="store_true", help="Run predefined tests with known paths."
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=32,
+        help="Batch size for training and evaluation.",
+    )
     args = parser.parse_args()
+
+    if args.tests:
+        test_paths = [
+            [
+                "assets/train_dataset1.csv",
+                "assets/val_dataset1.csv",
+                "assets/test_dataset1.csv",
+            ],
+            [
+                "assets/train_dataset2.csv",
+                "assets/val_dataset2.csv",
+                "assets/test_dataset2.csv",
+            ],
+            [
+                "assets/train_dataset.csv",
+                "assets/validation_dataset.csv",
+                "assets/test_dataset.csv",
+            ],
+        ]
+        for paths in test_paths:
+            main(paths, args.batch_size)
+
+        exit(1)
+
     if args.path is None and args.list_path is None:
         print("Please provide the path to the dataset CSV file using --path.")
         exit(1)
@@ -326,6 +460,6 @@ if __name__ == "__main__":
         exit(1)
 
     if args.list_path:
-        main(args.list_path)
+        main(args.list_path, args.batch_size)
     else:
-        main(args.path)
+        main(args.path, args.batch_size)

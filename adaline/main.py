@@ -1,319 +1,475 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import enum
 from pathlib import Path
-from numpy.typing import NDArray
+from typing import List, Self, Tuple
+from torch.optim import SGD, Adam
+import torch.nn as nn
+import pandas as pd
+import argparse
+import torch
+import numpy as np
+from torch.utils.data import DataLoader
 from itertools import product
+import matplotlib.pyplot as plt
+from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
+
+DROPOUT_RATE = 0.1
+L2_LAMBDA = 0.001
+PATIENCE = 20
+EPOCHS = 100
 
 
-class Adaline:
-    weights: NDArray
-    name: str
+def create_ds_from_df(df: pd.DataFrame) -> torch.utils.data.TensorDataset:
+    label = df["label"].values
+    if any(label < 0):
+        label = (label > 0).astype(int)
 
-    def __init__(self, name: str = "Adaline"):
+    return torch.utils.data.TensorDataset(
+        torch.tensor(df.drop("label", axis=1).values, dtype=torch.float32),
+        torch.tensor(label, dtype=torch.long),
+    )
+
+
+def preprocess(path, batch_size=32) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """Reads a CSV file and returns its train, validation and test subsets as dataloaders."""
+    dataset = pd.read_csv(path)
+    dataset = dataset.sample(frac=1).reset_index(drop=True)
+    train_size = int(0.7 * len(dataset))
+    val_size = int(0.15 * len(dataset))
+    train_df = dataset[:train_size]
+    val_df = dataset[train_size : train_size + val_size]
+    test_df = dataset[train_size + val_size :]
+
+    train_ds = create_ds_from_df(train_df)
+    val_ds = create_ds_from_df(val_df)
+    test_ds = create_ds_from_df(test_df)
+
+    train_loader = torch.utils.data.DataLoader(train_ds, batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(val_ds, batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(test_ds, batch_size, shuffle=False)
+
+    return train_loader, val_loader, test_loader
+
+
+def preprocess_know_paths(
+    train_path, val_path, test_path, batch_size=32
+) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """Reads 3 given CSV files and returns their respective train, validation and test data as dataloaders."""
+    train_df = pd.read_csv(train_path)
+    val_df = pd.read_csv(val_path)
+    test_df = pd.read_csv(test_path)
+
+    train_ds = create_ds_from_df(train_df)
+    val_ds = create_ds_from_df(val_df)
+    test_ds = create_ds_from_df(test_df)
+
+    train_loader = torch.utils.data.DataLoader(train_ds, batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(val_ds, batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(test_ds, batch_size, shuffle=False)
+
+    return train_loader, val_loader, test_loader
+
+
+def get_metrics(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    multiclass: bool,
+) -> Tuple[float, float, float]:
+    """
+    Calculates f1 (weighted), roc_auc (weighted) and accuracy.
+
+    Args:
+        logits: raw model outputs (before softmax/sigmoid), shape (N, C) or (N, 1)
+        labels: ground-truth class indices, shape (N,)
+        multiclass: True for CrossEntropy problems, False for binary BCE
+    """
+    labels_np = labels.cpu().numpy()
+
+    if multiclass:
+        probs = torch.softmax(logits, dim=1).cpu().numpy()  # (N, C)
+        preds = probs.argmax(axis=1)  # (N,)
+        auc = roc_auc_score(labels_np, probs, average="weighted", multi_class="ovr")
+    else:
+        probs = torch.sigmoid(logits).squeeze().cpu().numpy()  # (N,)
+        preds = (probs >= 0.5).astype(int)
+        auc = roc_auc_score(labels_np, probs, average="weighted")
+
+    f1 = f1_score(labels_np, preds, average="weighted")
+    acc = accuracy_score(labels_np, preds)
+
+    return f1, auc, acc
+
+
+class RegularizationType(enum.Enum):
+    NONE = "none"
+    DROPOUT = "dropout"
+    L2 = "l2"
+
+
+class MLP(nn.Module):
+    def __init__(
+        self,
+        name: str,
+        layers: List[torch.uint16],
+        optimizer=SGD,
+        activation_fn: nn.Module = nn.ReLU,
+        regularization: RegularizationType = RegularizationType.NONE,
+        multiclass: bool = False,
+    ) -> None:
+        super(MLP, self).__init__()
         self.name = name
+        hidden_layers = self.init_hidden_layers(layers, activation_fn, regularization)
+        hidden_layers.append(self.init_output_layer(layers[-2], layers[-1]))
+        self.layers = nn.ModuleList(hidden_layers)
+        self.patience = PATIENCE
+        lr = 0.01 if optimizer == SGD else 0.001
+        self.optim = (
+            optimizer(self.parameters(), lr=lr, weight_decay=L2_LAMBDA)
+            if regularization == RegularizationType.L2
+            else optimizer(self.parameters(), lr=lr)
+        )
+        self.criterion = nn.CrossEntropyLoss() if multiclass else nn.BCEWithLogitsLoss()
+        self.multiclass = multiclass
 
-    def preprocess(self, data_path: Path) -> pd.DataFrame:
-        try:
-            if not data_path.exists():
-                raise FileNotFoundError(f"Data path does not exist: {data_path}")
-
-            df = pd.read_csv(data_path)
-            if "bias" not in df.columns:
-                df.insert(0, "bias", 1)
-            return df
-        except Exception as e:
-            print(f"Error loading data: {e}")
-            exit(1)
-
-    def sign(self, u):
-        return 1 if u >= np.float32(0) else -1
-
-    def get_delta(self, learning_rate, error, x):
-        return learning_rate * error * x
-
-    def plot_decision_boundary(self, x, labels, step: str = "train"):
-        if len(self.weights) > 3:
-            print(
-                f"Skipping decision boundary plot for {self.name}: Data is {len(self.weights) - 1}D."
+    def init_hidden_layers(
+        self,
+        shape_list: List[torch.uint16],
+        activation_fn: nn.Module = nn.ReLU,
+        regularization: RegularizationType = RegularizationType.NONE,
+    ) -> List[nn.Sequential]:
+        """Initializes the hidden layers of the MLP based on the provided shape list, activation function, and regularization type."""
+        hidden: List[nn.Sequential] = []
+        for i in range(len(shape_list) - 2):
+            input_feat = shape_list[i]
+            output_feat = shape_list[i + 1]
+            hidden.append(
+                nn.Sequential(
+                    nn.Linear(input_feat, output_feat),
+                    activation_fn(),
+                    nn.Dropout(DROPOUT_RATE)
+                    if regularization == RegularizationType.DROPOUT
+                    else nn.Identity(),
+                )
             )
-            return
-        x_min, x_max = x.iloc[:, 1].min() - 1, x.iloc[:, 1].max() + 1
-        y_min, y_max = x.iloc[:, 2].min() - 1, x.iloc[:, 2].max() + 1
-        xx, yy = np.meshgrid(
-            np.arange(x_min, x_max, 0.01), np.arange(y_min, y_max, 0.01)
+        return hidden
+
+    def init_output_layer(self, in_shape, out_shape) -> nn.Sequential:
+        """Initializes the output layer of the MLP based on the provided input and output shapes."""
+        return nn.Sequential(
+            nn.Linear(in_shape, out_shape),
         )
 
-        # Fast vectorized calculation
-        grid = np.c_[np.ones(xx.ravel().shape), xx.ravel(), yy.ravel()]
-        Z = np.where(np.dot(grid, self.weights) >= 0, 1, -1)
-        Z = Z.reshape(xx.shape)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for i in range(len(self.layers)):
+            x = self.layers[i](x)
+        return x
+
+    def plot_error(self, error, stage="train"):
+        """Plots the error over epochs and saves the plot as an image file in the assets/mlp directory."""
+        plt.figure()
+        plt.plot(error, color="blue", marker="o", markersize=3)
+        plt.xlabel("Épocas")
+        plt.ylabel("Erro de Classificação")
+        plt.title(f"Erro x Época\n({self.name})")
+        plt.tight_layout()
+        path = Path("assets/mlp")
+        path.mkdir(parents=True, exist_ok=True)
+        plt.savefig(path / f"{self.name}_{stage}_error_plot.png")
+        plt.close()
+
+    def plot_accuracy(self, accuracy, stage="train"):
+        """Plots the accuracy over epochs and saves the plot as an image file in the assets/mlp directory."""
+        plt.figure()
+        plt.plot(accuracy, color="green", marker="o", markersize=3)
+        plt.xlabel("Épocas")
+        plt.ylabel("Acurácia")
+        plt.title(f"Acurácia x Época\n({self.name})")
+        plt.tight_layout()
+        path = Path("assets/mlp")
+        path.mkdir(parents=True, exist_ok=True)
+        plt.savefig(path / f"{self.name}_{stage}_accuracy_plot.png")
+        plt.close()
+
+    def plot_decision_boundary(self, data: DataLoader, stage: str = "test"):
+        """
+        Plots the decision boundary for 2-feature datasets.
+        Adapted from the Adaline implementation.
+        Only works when the input has exactly 2 features.
+        """
+        # collect all features and labels from the dataloader
+        all_x = torch.cat([x for x, _ in data]).numpy()
+        all_y = torch.cat([y for _, y in data]).numpy()
+
+        if all_x.shape[1] != 2:
+            print(
+                f"Skipping decision boundary plot for {self.name}: "
+                f"Data is {all_x.shape[1]}D (requires 2D)."
+            )
+            return
+
+        x_min, x_max = all_x[:, 0].min() - 1, all_x[:, 0].max() + 1
+        y_min, y_max = all_x[:, 1].min() - 1, all_x[:, 1].max() + 1
+        xx, yy = np.meshgrid(
+            np.arange(x_min, x_max, 0.01),
+            np.arange(y_min, y_max, 0.01),
+        )
+
+        grid = torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32)
+        Z = self.predict(grid).numpy().reshape(xx.shape)
 
         plt.figure()
         plt.contourf(xx, yy, Z, alpha=0.8, cmap="RdYlBu")
         plt.scatter(
-            x.iloc[:, 1],
-            x.iloc[:, 2],
-            c=labels,
+            all_x[:, 0],
+            all_x[:, 1],
+            c=all_y,
             cmap="RdYlBu",
             edgecolors="k",
             marker="o",
         )
         plt.xlabel("Feature 1")
         plt.ylabel("Feature 2")
-        plt.title(f"Decision Boundary of {self.name}")
+        plt.title(f"Decision Boundary\n({self.name})")
 
-        Path("../assets/adaline").mkdir(parents=True, exist_ok=True)
-        plt.savefig(f"../assets/adaline/{step}_decision_boundary_{self.name}.png")
+        path = Path("assets/mlp")
+        path.mkdir(parents=True, exist_ok=True)
+        plt.savefig(path / f"{self.name}_{stage}_decision_boundary.png")
         plt.close()
 
-    def plot_error(self, classification_error):
-        plt.figure()
-        plt.plot(classification_error, color="blue", marker="o", markersize=3)
-        plt.xlabel("Épocas")
-        plt.ylabel("Erro de Classificação")
-        plt.title(f"Erro de Classificação x Época\n({self.name})")
-        plt.tight_layout()
-        plt.savefig(f"../assets/adaline/erro_{self.name}.png")
-        plt.close()
+    def fit(
+        self, train_dataloader: DataLoader, epochs: int = 10, val_df: DataLoader = None
+    ) -> Tuple[List[float], List[float], List[float], List[float]]:
+        nn.Module.train(self)  # fix: avoids recursion with the overridden train()
+        best_loss = float("inf")
+        epochs_without_improvement = 0
+        train_loss_history = []
+        train_acc_history = []
+        val_loss_history = []
+        val_acc_history = []
 
-    def plot_eqm(self, eqms):
-        plt.figure()
-        plt.plot(eqms, color="red", marker="o", markersize=3)
-        plt.xlabel("Épocas")
-        plt.ylabel("Erro Quadrático Médio")
-        plt.title(f"Erro Quadrático Médio x Época\n({self.name})")
-        plt.tight_layout()
-        plt.savefig(f"../assets/adaline/eqm_{self.name}.png")
-        plt.close()
+        for e in range(epochs):
+            epoch_loss = 0.0
+            correct = 0
+            total = 0
+            for x, y in train_dataloader:
+                output = self.forward(x)
+                loss = self.criterion(output, y)
+                self.optim.zero_grad()
+                loss.backward()
+                self.optim.step()
 
-    def eqm(self, x, d):
-        u = np.dot(x.values, self.weights)
-        return np.mean((d.values - u) ** 2)
-
-    def train(
-        self,
-        data: pd.DataFrame,
-        learning_rate=0.01,
-        batch=False,
-        max_epochs=100,
-        precision=0.01,
-        seed=42,
-    ):
-        labels = data["label"]
-        x = data.drop("label", axis=1)
-        size = len(x.columns)
-        p = len(data)
-
-        self.weights = np.random.default_rng(seed).random(size)
-        classification_error = []
-        epoch = 0
-        eqms = []
-
-        x_vals = x.values
-        label_vals = labels.values
-
-        while epoch < max_epochs:
-            count = 0
-            delta_w_sum = np.zeros(size)
-
-            for i in range(p):
-                u = np.dot(self.weights, x_vals[i])
-                y = self.sign(u)
-                error = label_vals[i] - u
-
-                if batch:
-                    delta_w_sum += error * x_vals[i]
+                if self.multiclass:
+                    preds = torch.argmax(output, dim=1)
                 else:
-                    self.weights += self.get_delta(learning_rate, error, x_vals[i])
+                    preds = (torch.sigmoid(output) >= 0.5).squeeze().long()
 
-                if label_vals[i] != y:
-                    count += 1
+                correct += (preds == y).sum().item()
+                total += y.size(0)
+                epoch_loss += loss.item()
 
-            if batch:
-                self.weights += learning_rate * (1 / p) * delta_w_sum
+            epoch_loss /= len(train_dataloader)
+            epoch_acc = correct / total
+            train_loss_history.append(epoch_loss)
+            train_acc_history.append(epoch_acc)
 
-            classification_error.append(count / p)
-            eqms.append(self.eqm(x, labels))
-            epoch += 1
+            if val_df is not None:
+                val_loss, val_acc, _ = self.evaluate(val_df)
+                if val_loss < best_loss:
+                    best_loss = val_loss
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
 
-            if len(eqms) > 1 and abs(eqms[-1] - eqms[-2]) < precision:
-                print(f"Converged at epoch {epoch}")
+                val_loss_history.append(val_loss)
+                val_acc_history.append(val_acc)
+                nn.Module.train(self)  # back to train mode after evaluate
+
+            print(f"Epoch {e + 1}/{epochs} completed.")
+            if val_df is not None and epochs_without_improvement >= self.patience:
+                print(
+                    f"Early stopping triggered after {epochs_without_improvement + 1} epochs without improvement."
+                )
                 break
 
-        train_acc = 1 - classification_error[-1]
-        final_eqm = eqms[-1]
+        return train_loss_history, train_acc_history, val_loss_history, val_acc_history
 
-        print(f"Final weights: {self.weights}")
-        print(f"Final Training Accuracy: {train_acc:.4f}")
-        print(f"Final eqm {final_eqm:.4f}")
-        self.plot_error(classification_error)
-        self.plot_eqm(eqms)
-        self.plot_decision_boundary(x, labels, step="train")
+    def evaluate(self, data: DataLoader) -> Tuple[float, float, Tuple]:
+        """Returns loss, accuracy and extended metrics (f1, auc, acc)."""
+        self.eval()
+        all_logits = []
+        all_labels = []
+        loss = 0.0
 
-        return epoch, train_acc, final_eqm
+        with torch.no_grad():
+            for x, y in data:
+                output = self.forward(x)
+                loss += self.criterion(output, y).item()
+                all_logits.append(output)
+                all_labels.append(y)
 
-    def test(self, data):
-        labels = data["label"]
-        x = data.drop("label", axis=1)
+        all_logits = torch.cat(all_logits)
+        all_labels = torch.cat(all_labels)
 
-        u = np.dot(x.values, self.weights)
-        preds = np.where(u >= 0, 1, -1)
+        f1, auc, acc = get_metrics(all_logits, all_labels, self.multiclass)
+        avg_loss = loss / len(data)
 
-        error = np.sum(labels.values != preds)
-        accuracy = 1 - (error / len(data))
+        print(f"Accuracy: {acc:.4f} | F1: {f1:.4f} | AUC: {auc:.4f}")
+        return avg_loss, acc, (f1, auc, acc)
 
-        print(f"Test Accuracy: {accuracy:.4f}")
-        self.plot_decision_boundary(x, labels, step="test")
-        return accuracy
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        with torch.no_grad():
+            output = self.forward(x)
+            if self.multiclass:
+                predicted = torch.argmax(output, dim=1)
+            else:
+                predicted = (torch.sigmoid(output) >= 0.5).squeeze().long()
+        return predicted
+
+
+def main(path: str | List[str], batch_size=32):
+    if isinstance(path, list) and len(path) == 3:
+        (train_dataloader, val_dataloader, test_dataloader) = preprocess_know_paths(
+            *path
+        )
+    elif isinstance(path, str):
+        (train_dataloader, val_dataloader, test_dataloader) = preprocess(path)
+    else:
+        print(
+            "Invalid path input. Please provide either a single CSV file path or three CSV file paths for train, val, and test."
+        )
+        return
+
+    optimizers = [SGD, Adam]
+
+    architectures = [
+        [
+            train_dataloader.dataset.tensors[0].shape[1],
+            64,
+            len(train_dataloader.dataset.tensors[1].unique()),
+        ],
+        [
+            train_dataloader.dataset.tensors[0].shape[1],
+            128,
+            64,
+            len(train_dataloader.dataset.tensors[1].unique()),
+        ],
+        [
+            train_dataloader.dataset.tensors[0].shape[1],
+            256,
+            128,
+            64,
+            len(train_dataloader.dataset.tensors[1].unique()),
+        ],
+    ]
+
+    activ_fns = [nn.ReLU, nn.Tanh]
+    regularization_types = ["none", "dropout", "l2"]
+    is_multiclass = len(train_dataloader.dataset.tensors[1].unique()) > 2
+
+    results = []
+    hyperparams = product(optimizers, architectures, activ_fns, regularization_types)
+
+    for h in hyperparams:
+        model_name = (
+            f"Optimizer-{h[0].__name__}_Arch-{len(h[1]) - 2}hidden"
+            f"_Act-{h[2].__name__}_Reg-{h[3]}"
+        )
+        m = MLP(
+            model_name,
+            optimizer=h[0],
+            layers=h[1],
+            activation_fn=h[2],
+            regularization=RegularizationType(h[3]),
+            multiclass=is_multiclass,
+        )
+        train_loss, train_acc, val_loss, val_acc = m.fit(
+            train_dataloader, EPOCHS, val_dataloader
+        )
+        m.plot_error(train_loss, stage="train")
+        m.plot_accuracy(train_acc, stage="train")
+        if val_loss:
+            m.plot_error(val_loss, stage="val")
+            m.plot_accuracy(val_acc, stage="val")
+
+        # decision boundary (only plots if data is 2D)
+        m.plot_decision_boundary(test_dataloader, stage="test")
+
+        test_loss, test_acc, (f1, auc, acc) = m.evaluate(test_dataloader)
+        print(
+            f"Test Loss: {test_loss:.4f} | Accuracy: {acc:.4f} | F1: {f1:.4f} | AUC: {auc:.4f}"
+        )
+
+        results.append(
+            {
+                "model": model_name,
+                "optimizer": h[0].__name__,
+                "architecture": str(h[1]),
+                "activation": h[2].__name__,
+                "regularization": h[3],
+                "test_loss": round(test_loss, 4),
+                "test_acc": round(test_acc, 4),
+                "test_f1": round(f1, 4),
+                "test_auc": round(auc, 4),
+            }
+        )
+
+    # save comparison table
+    results_df = pd.DataFrame(results)
+    out_path = Path("assets/mlp")
+    out_path.mkdir(parents=True, exist_ok=True)
+    results_df.to_csv(out_path / "results.csv", index=False)
+    print(f"\nResults saved to {out_path / 'results.csv'}")
 
 
 if __name__ == "__main__":
-    hyperparams_ds1_2 = {"epsilon": 0.001, "LR": 0.01, "max_epochs": 100, "seed": 42}
-    metrics_log = []
+    parser = argparse.ArgumentParser(description="Train an MLP on a dataset.")
+    parser.add_argument("--path", type=str, help="Path to the dataset CSV file.")
+    parser.add_argument(
+        "--list_path", nargs=3, help="Paths to the train, val, and test CSV files."
+    )
+    parser.add_argument(
+        "--tests", action="store_true", help="Run predefined tests with known paths."
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=32,
+        help="Batch size for training and evaluation.",
+    )
+    args = parser.parse_args()
 
-    try:
-        for i in range(1, 4):
-            train_path = Path(f"../assets/train_dataset{i}.csv")
-            test_path = Path(f"../assets/test_dataset{i}.csv")
+    if args.tests:
+        test_paths = [
+            [
+                "assets/train_dataset1.csv",
+                "assets/val_dataset1.csv",
+                "assets/test_dataset1.csv",
+            ],
+            [
+                "assets/train_dataset2.csv",
+                "assets/val_dataset2.csv",
+                "assets/test_dataset2.csv",
+            ],
+            [
+                "assets/train_dataset.csv",
+                "assets/validation_dataset.csv",
+                "assets/test_dataset.csv",
+            ],  # fix: missing commas
+        ]
+        for paths in test_paths:
+            main(paths, args.batch_size)
 
-            if not train_path.exists() or not test_path.exists():
-                print(f"Skipping dataset {i}: Data paths do not exist")
-                continue
-
-            preprocessor = Adaline()
-            df = preprocessor.preprocess(train_path)
-            df_test = preprocessor.preprocess(test_path)
-
-            if i != 3:
-                # --- Amostra ---
-                model = Adaline(f"Adaline_DS{i}_Amostra")
-                print(f"\n=== Training Dataset {i} (Por Amostra) ===")
-                ep, tr_acc, f_eqm = model.train(
-                    df,
-                    learning_rate=hyperparams_ds1_2["LR"],
-                    batch=False,
-                    max_epochs=hyperparams_ds1_2["max_epochs"],
-                    precision=hyperparams_ds1_2["epsilon"],
-                    seed=hyperparams_ds1_2["seed"],
-                )
-                print("--- Testing ---")
-                te_acc = model.test(df_test)
-
-                metrics_log.append(
-                    {
-                        "Dataset": i,
-                        "Abordagem": "Amostra",
-                        "LR": hyperparams_ds1_2["LR"],
-                        "Precision": hyperparams_ds1_2["epsilon"],
-                        "Epochs": ep,
-                        "Final_EQM": f_eqm,
-                        "Train_Acc": tr_acc,
-                        "Test_Acc": te_acc,
-                    }
-                )
-
-                # --- Batch ---
-                model_batch = Adaline(f"Adaline_DS{i}_Batch")
-                print(f"\n=== Training Dataset {i} (Batch) ===")
-                ep, tr_acc, f_eqm = model_batch.train(
-                    df,
-                    learning_rate=hyperparams_ds1_2["LR"],
-                    batch=True,
-                    max_epochs=hyperparams_ds1_2["max_epochs"],
-                    precision=hyperparams_ds1_2["epsilon"],
-                    seed=hyperparams_ds1_2["seed"],
-                )
-                print("--- Testing ---")
-                te_acc = model_batch.test(df_test)
-
-                metrics_log.append(
-                    {
-                        "Dataset": i,
-                        "Abordagem": "Batch",
-                        "LR": hyperparams_ds1_2["LR"],
-                        "Precision": hyperparams_ds1_2["epsilon"],
-                        "Epochs": ep,
-                        "Final_EQM": f_eqm,
-                        "Train_Acc": tr_acc,
-                        "Test_Acc": te_acc,
-                    }
-                )
-
-            if i == 3:
-                learning_rates = [0.01, 0.001, 0.0001]
-                epsilon = [0.1, 0.0001]
-                max_epochs = 100
-
-                for lr, precision in product(learning_rates, epsilon):
-                    # --- Amostra ---
-                    model = Adaline(f"Adaline_DS3_LR{lr}_Prec{precision}")
-                    print(
-                        f"\n=== Training Dataset 3 (Amostra) with LR: {lr}, precision: {precision} ==="
-                    )
-                    ep, tr_acc, f_eqm = model.train(
-                        df,
-                        learning_rate=lr,
-                        batch=False,
-                        max_epochs=max_epochs,
-                        precision=precision,
-                        seed=hyperparams_ds1_2["seed"],
-                    )
-                    print("--- Testing ---")
-                    te_acc = model.test(df_test)
-
-                    metrics_log.append(
-                        {
-                            "Dataset": 3,
-                            "Abordagem": "Amostra",
-                            "LR": lr,
-                            "Precision": precision,
-                            "Epochs": ep,
-                            "Final_EQM": f_eqm,
-                            "Train_Acc": tr_acc,
-                            "Test_Acc": te_acc,
-                        }
-                    )
-
-                    # --- Batch ---
-                    model_batch = Adaline(f"Adaline_DS3_LR{lr}_Prec{precision}_Batch")
-                    print(
-                        f"\n=== Training Dataset 3 (Batch) with LR: {lr}, precision: {precision} ==="
-                    )
-                    ep, tr_acc, f_eqm = model_batch.train(
-                        df,
-                        learning_rate=lr,
-                        batch=True,
-                        max_epochs=max_epochs,
-                        precision=precision,
-                        seed=hyperparams_ds1_2["seed"],
-                    )
-                    print("--- Testing ---")
-                    te_acc = model_batch.test(df_test)
-
-                    metrics_log.append(
-                        {
-                            "Dataset": 3,
-                            "Abordagem": "Batch",
-                            "LR": lr,
-                            "Precision": precision,
-                            "Epochs": ep,
-                            "Final_EQM": f_eqm,
-                            "Train_Acc": tr_acc,
-                            "Test_Acc": te_acc,
-                        }
-                    )
-
-        if metrics_log:
-            metrics_df = pd.DataFrame(metrics_log)
-            metrics_df = metrics_df.round(4)
-            log_path = Path("../assets/adaline/metrics_log.csv")
-            metrics_df.to_csv(log_path, index=False)
-            print(f"\nTodas as métricas foram salvas com sucesso em: {log_path}")
-
-    except KeyboardInterrupt:
-        print("\nExiting...")
-        exit(0)
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    if args.path is None and args.list_path is None:
+        print("Please provide the path to the dataset CSV file using --path.")
         exit(1)
+
+    if (args.path and not args.path.endswith(".csv")) or (
+        args.list_path and any(not path.endswith(".csv") for path in args.list_path)
+    ):
+        print("Please provide a valid CSV file path.")
+        exit(1)
+
+    if args.list_path:
+        main(args.list_path, args.batch_size)
+    else:
+        main(args.path, args.batch_size)
