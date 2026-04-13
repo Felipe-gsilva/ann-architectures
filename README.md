@@ -5,9 +5,10 @@ Só rode (com o venv ativado):
 pip install -r requirements.txt
 ```
 
-# perceptron
-
-# adaline
-
-# MLP
+# Redes Disponiveis
+1 camada
+- perceptron
+- adaline
+n camadas
+- MLP
 
