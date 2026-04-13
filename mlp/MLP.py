@@ -1,6 +1,6 @@
 import enum
 from pathlib import Path
-from typing import List, Self, Tuple
+from typing import List, Tuple
 from torch.optim import SGD, Adam
 import torch.nn as nn
 import pandas as pd
@@ -168,7 +168,9 @@ class MLP(nn.Module):
         plt.figure()
         plt.plot(error, color="blue", marker="o", markersize=3)
         plt.xlabel("Épocas")
+        plt.xlim(0, EPOCHS)
         plt.ylabel("Erro de Classificação")
+        plt.ylim(0, max(error) * 1.1)
         plt.title(f"Erro x Época\n({self.name})")
         plt.tight_layout()
         path = Path("assets/mlp")
@@ -181,7 +183,9 @@ class MLP(nn.Module):
         plt.figure()
         plt.plot(accuracy, color="green", marker="o", markersize=3)
         plt.xlabel("Épocas")
+        plt.xlim(0, EPOCHS)
         plt.ylabel("Acurácia")
+        plt.ylim(0, 1.0)
         plt.title(f"Acurácia x Época\n({self.name})")
         plt.tight_layout()
         path = Path("assets/mlp")
@@ -330,10 +334,10 @@ class MLP(nn.Module):
 def main(path: str | List[str], batch_size=32):
     if isinstance(path, list) and len(path) == 3:
         (train_dataloader, val_dataloader, test_dataloader) = preprocess_know_paths(
-            *path
+            *path, batch_size=batch_size
         )
     elif isinstance(path, str):
-        (train_dataloader, val_dataloader, test_dataloader) = preprocess(path)
+        (train_dataloader, val_dataloader, test_dataloader) = preprocess(path, batch_size=batch_size)
     else:
         print(
             "Invalid path input. Please provide either a single CSV file path or three CSV file paths for train, val, and test."
