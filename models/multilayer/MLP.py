@@ -463,7 +463,7 @@ if __name__ == "__main__":
             main(paths, args.batch_size, i)
             i += 1
 
-        exit(1)
+        exit(0)
 
     if args.path is None and args.list_path is None:
         print("Please provide the path to the dataset CSV file using --path.")
