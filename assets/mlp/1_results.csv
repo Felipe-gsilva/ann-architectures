@@ -1,0 +1,37 @@
+model,optimizer,architecture,activation,regularization,test_loss,test_acc,test_f1,test_auc,final_train_loss,final_train_acc,final_val_loss,final_val_acc
+Optimizer-SGD_Arch-1hidden_Act-ReLU_Reg-none,SGD,"[2, 64, 1]",ReLU,none,0.4931,1.0,1.0,1.0,0.4828,1.0,0.4839,1.0
+Optimizer-SGD_Arch-1hidden_Act-ReLU_Reg-dropout,SGD,"[2, 64, 1]",ReLU,dropout,0.5876,1.0,1.0,1.0,0.5904,0.9371,0.5789,1.0
+Optimizer-SGD_Arch-1hidden_Act-ReLU_Reg-l2,SGD,"[2, 64, 1]",ReLU,l2,0.5152,0.973,0.9731,1.0,0.4905,0.9943,0.5266,0.9737
+Optimizer-SGD_Arch-1hidden_Act-Tanh_Reg-none,SGD,"[2, 64, 1]",Tanh,none,0.6738,0.6216,0.5846,0.6756,0.6734,0.6857,0.6735,0.6053
+Optimizer-SGD_Arch-1hidden_Act-Tanh_Reg-dropout,SGD,"[2, 64, 1]",Tanh,dropout,0.6705,0.6757,0.655,0.5952,0.6718,0.6571,0.6635,0.6842
+Optimizer-SGD_Arch-1hidden_Act-Tanh_Reg-l2,SGD,"[2, 64, 1]",Tanh,l2,0.6718,0.6486,0.6206,0.7054,0.6702,0.7257,0.6729,0.6842
+Optimizer-SGD_Arch-2hidden_Act-ReLU_Reg-none,SGD,"[2, 128, 64, 1]",ReLU,none,0.5308,1.0,1.0,1.0,0.5035,1.0,0.5292,1.0
+Optimizer-SGD_Arch-2hidden_Act-ReLU_Reg-dropout,SGD,"[2, 128, 64, 1]",ReLU,dropout,0.4344,1.0,1.0,1.0,0.4351,1.0,0.4244,1.0
+Optimizer-SGD_Arch-2hidden_Act-ReLU_Reg-l2,SGD,"[2, 128, 64, 1]",ReLU,l2,0.4101,1.0,1.0,1.0,0.3865,1.0,0.408,1.0
+Optimizer-SGD_Arch-2hidden_Act-Tanh_Reg-none,SGD,"[2, 128, 64, 1]",Tanh,none,0.6492,0.6216,0.5846,0.8839,0.643,0.7086,0.651,0.6316
+Optimizer-SGD_Arch-2hidden_Act-Tanh_Reg-dropout,SGD,"[2, 128, 64, 1]",Tanh,dropout,0.6615,0.5676,0.5066,0.9107,0.6562,0.6514,0.6635,0.5789
+Optimizer-SGD_Arch-2hidden_Act-Tanh_Reg-l2,SGD,"[2, 128, 64, 1]",Tanh,l2,0.6724,0.6216,0.5846,0.5863,0.6673,0.72,0.6662,0.6842
+Optimizer-SGD_Arch-3hidden_Act-ReLU_Reg-none,SGD,"[2, 256, 128, 64, 1]",ReLU,none,0.4637,1.0,1.0,1.0,0.4448,1.0,0.4379,1.0
+Optimizer-SGD_Arch-3hidden_Act-ReLU_Reg-dropout,SGD,"[2, 256, 128, 64, 1]",ReLU,dropout,0.4781,1.0,1.0,1.0,0.4913,1.0,0.4745,1.0
+Optimizer-SGD_Arch-3hidden_Act-ReLU_Reg-l2,SGD,"[2, 256, 128, 64, 1]",ReLU,l2,0.4851,1.0,1.0,1.0,0.467,1.0,0.4829,1.0
+Optimizer-SGD_Arch-3hidden_Act-Tanh_Reg-none,SGD,"[2, 256, 128, 64, 1]",Tanh,none,0.6749,0.6216,0.5846,0.6042,0.6687,0.72,0.6679,0.6842
+Optimizer-SGD_Arch-3hidden_Act-Tanh_Reg-dropout,SGD,"[2, 256, 128, 64, 1]",Tanh,dropout,0.6689,0.6216,0.5846,0.6071,0.6638,0.7086,0.6606,0.6842
+Optimizer-SGD_Arch-3hidden_Act-Tanh_Reg-l2,SGD,"[2, 256, 128, 64, 1]",Tanh,l2,0.6592,0.6216,0.5846,0.6845,0.6475,0.7143,0.6577,0.6842
+Optimizer-Adam_Arch-1hidden_Act-ReLU_Reg-none,Adam,"[2, 64, 1]",ReLU,none,0.0832,1.0,1.0,1.0,0.0827,1.0,0.0777,1.0
+Optimizer-Adam_Arch-1hidden_Act-ReLU_Reg-dropout,Adam,"[2, 64, 1]",ReLU,dropout,0.0975,1.0,1.0,1.0,0.0918,1.0,0.0887,1.0
+Optimizer-Adam_Arch-1hidden_Act-ReLU_Reg-l2,Adam,"[2, 64, 1]",ReLU,l2,0.1333,1.0,1.0,1.0,0.1198,1.0,0.1299,1.0
+Optimizer-Adam_Arch-1hidden_Act-Tanh_Reg-none,Adam,"[2, 64, 1]",Tanh,none,0.4761,1.0,1.0,1.0,0.4537,0.9943,0.4749,1.0
+Optimizer-Adam_Arch-1hidden_Act-Tanh_Reg-dropout,Adam,"[2, 64, 1]",Tanh,dropout,0.4891,0.9189,0.9193,1.0,0.4622,0.9314,0.5117,0.8947
+Optimizer-Adam_Arch-1hidden_Act-Tanh_Reg-l2,Adam,"[2, 64, 1]",Tanh,l2,0.5393,0.8919,0.8922,1.0,0.5112,0.9657,0.5348,1.0
+Optimizer-Adam_Arch-2hidden_Act-ReLU_Reg-none,Adam,"[2, 128, 64, 1]",ReLU,none,0.0007,1.0,1.0,1.0,0.0007,1.0,0.0006,1.0
+Optimizer-Adam_Arch-2hidden_Act-ReLU_Reg-dropout,Adam,"[2, 128, 64, 1]",ReLU,dropout,0.0005,1.0,1.0,1.0,0.0009,1.0,0.0004,1.0
+Optimizer-Adam_Arch-2hidden_Act-ReLU_Reg-l2,Adam,"[2, 128, 64, 1]",ReLU,l2,0.0041,1.0,1.0,1.0,0.0034,1.0,0.0033,1.0
+Optimizer-Adam_Arch-2hidden_Act-Tanh_Reg-none,Adam,"[2, 128, 64, 1]",Tanh,none,0.0076,1.0,1.0,1.0,0.0062,1.0,0.007,1.0
+Optimizer-Adam_Arch-2hidden_Act-Tanh_Reg-dropout,Adam,"[2, 128, 64, 1]",Tanh,dropout,0.0142,1.0,1.0,1.0,0.0188,1.0,0.0165,1.0
+Optimizer-Adam_Arch-2hidden_Act-Tanh_Reg-l2,Adam,"[2, 128, 64, 1]",Tanh,l2,0.0158,1.0,1.0,1.0,0.0136,1.0,0.015,1.0
+Optimizer-Adam_Arch-3hidden_Act-ReLU_Reg-none,Adam,"[2, 256, 128, 64, 1]",ReLU,none,0.0,1.0,1.0,1.0,0.0,1.0,0.0,1.0
+Optimizer-Adam_Arch-3hidden_Act-ReLU_Reg-dropout,Adam,"[2, 256, 128, 64, 1]",ReLU,dropout,0.0,1.0,1.0,1.0,0.0,1.0,0.0,1.0
+Optimizer-Adam_Arch-3hidden_Act-ReLU_Reg-l2,Adam,"[2, 256, 128, 64, 1]",ReLU,l2,0.0016,1.0,1.0,1.0,0.0012,1.0,0.0011,1.0
+Optimizer-Adam_Arch-3hidden_Act-Tanh_Reg-none,Adam,"[2, 256, 128, 64, 1]",Tanh,none,0.0007,1.0,1.0,1.0,0.0006,1.0,0.0006,1.0
+Optimizer-Adam_Arch-3hidden_Act-Tanh_Reg-dropout,Adam,"[2, 256, 128, 64, 1]",Tanh,dropout,0.0005,1.0,1.0,1.0,0.0008,1.0,0.0004,1.0
+Optimizer-Adam_Arch-3hidden_Act-Tanh_Reg-l2,Adam,"[2, 256, 128, 64, 1]",Tanh,l2,0.0046,1.0,1.0,1.0,0.0038,1.0,0.0039,1.0

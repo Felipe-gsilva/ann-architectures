@@ -398,7 +398,6 @@ def main(path: str | List[str], batch_size=32, test_num=None):
 
         results.append(
             {
-                "dataset_num": test_num,
                 "model": model_name,
                 "optimizer": h[0].__name__,
                 "architecture": str(h[1]),
@@ -419,7 +418,7 @@ def main(path: str | List[str], batch_size=32, test_num=None):
     results_df = pd.DataFrame(results)
     out_path = Path("assets/mlp")
     out_path.mkdir(parents=True, exist_ok=True)
-    results_df.to_csv(out_path / "results.csv", index=False)
+    results_df.to_csv(out_path / f"{test_num}_results.csv", index=False)
     print(f"\nResults saved to {out_path / 'results.csv'}")
 
 
