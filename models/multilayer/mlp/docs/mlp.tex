@@ -20,7 +20,12 @@
 \maketitle
 
 \section{Introdução e Implementação}
-Este documento apresenta os resultados da implementação e avaliação do modelo MLP (Multilayer Perceptron). 
+Este documento apresenta os resultados da implementação e avaliação do modelo MLP (Multilayer Perceptron). A MLP foi construida com o módulo de python conhecido como PyTorch, que provê implementações pré construídas importantes e otimizadas para GPU. Escolheu-se utilizar o DataLoader do Torch e uma arquitetura genérica para qualquer entrada, onde a rede deve identificar o tipo de problema de classificação (binário ou multiclasse), a partir dai definindo as funções de ativação ReLU ou Tahn, assim como o tamanho da camada final.
+
+Como o CrossEntropy ja aplica o softmax, o problema multiclasse é naturalmente resolvido, precisa-se apenas selecionar o argmax. No binário, é necessário ativar o vetor de 2 posições de saída, logo, pode-se usar a função sigmoid para ativar a saida do modelo e dai enviar para função BCELoss. Se usarmos a BCEWithLogitsLoss, esse sigmoid é automaticamente aplicado.
+
+
+Utizilou-se o scikit\_learn para calcular-se as métricas, como f1\_score, AUC-ROC e acurácia. A sequência de testes foi estabelecida usando uma combinação entre conjuntos arquiteturas, funções de ativação, datasets, otimizadores e tipos de regularização. Seguem exemplos dos treinos nessa estrutura.
 
 
 \section{Experimentos: Dataset 1 e 2}

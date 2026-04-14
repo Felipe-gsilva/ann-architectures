@@ -1,3 +1,4 @@
+from models.simple.simple import SimpleModel
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,25 +7,11 @@ from numpy.typing import NDArray
 from itertools import product
 
 
-class Perceptron:
+class Perceptron(SimpleModel):
     weights: NDArray
-    name: str
 
-    def __init__(self, name: str = "Perceptron"):
-        self.name = name
-
-    def preprocess(self, data_path: Path) -> pd.DataFrame:
-        try:
-            if not data_path.exists():
-                raise FileNotFoundError(f"Data path does not exist: {data_path}")
-
-            df = pd.read_csv(data_path)
-            if "bias" not in df.columns:
-                df.insert(0, "bias", 1)
-            return df
-        except Exception as e:
-            print(f"Error loading data: {e}")
-            exit(1)
+    def __init__(self, name="Perceptron"):
+        super().__init__(name)
 
     def sign(self, u):
         return 1 if u >= np.float32(0) else -1
@@ -32,64 +19,18 @@ class Perceptron:
     def get_delta(self, learning_rate, error, x):
         return learning_rate * error * x
 
-    def plot_decision_boundary(self, x, labels, step: str = "train"):
-        if len(self.weights) > 3:
-            print(
-                f"Skipping decision boundary plot for {self.name}: Data is {len(self.weights) - 1}D."
-            )
-            return
-
-        x_min, x_max = x.iloc[:, 1].min() - 1, x.iloc[:, 1].max() + 1
-        y_min, y_max = x.iloc[:, 2].min() - 1, x.iloc[:, 2].max() + 1
-        xx, yy = np.meshgrid(
-            np.arange(x_min, x_max, 0.01), np.arange(y_min, y_max, 0.01)
-        )
-
-        grid = np.c_[np.ones(xx.ravel().shape), xx.ravel(), yy.ravel()]
-        Z = np.where(np.dot(grid, self.weights) >= 0, 1, -1)
-        Z = Z.reshape(xx.shape)
-
-        plt.figure()
-        plt.contourf(xx, yy, Z, alpha=0.8, cmap="RdYlBu")
-        plt.scatter(
-            x.iloc[:, 1],
-            x.iloc[:, 2],
-            c=labels,
-            cmap="RdYlBu",
-            edgecolors="k",
-            marker="o",
-        )
-        plt.xlabel("Feature 1")
-        plt.ylabel("Feature 2")
-        plt.title(f"Decision Boundary of {self.name}")
-
-        Path("../assets/perceptron").mkdir(parents=True, exist_ok=True)
-        plt.savefig(f"../assets/perceptron/{step}_decision_boundary_{self.name}.png")
-        plt.close()
-
-    def plot_error(self, classification_error):
-        plt.figure()
-        plt.plot(classification_error, color="blue", marker="o", markersize=3)
-        plt.xlabel("Épocas")
-        plt.ylabel("Erro de Classificação")
-        plt.title(f"Erro de Classificação x Época\n({self.name})")
-        plt.tight_layout()
-        plt.savefig(f"../assets/perceptron/erro_{self.name}.png")
-        plt.close()
-
     def train(self, data: pd.DataFrame, learning_rate=0.01, epochs=1000, seed=42):
         labels = data["label"]
         x = data.drop("label", axis=1)
         size = len(x.columns)
-
-        self.weights = np.random.default_rng(seed).random(size)
+        self.weights = self.init_weights(WeightsInitializationType.RANDOM, size, seed)
         classification_error = []
 
         x_vals = x.values
         label_vals = labels.values
         epochs_run = 0
 
-        for e in range(epochs):
+        for _ in range(epochs):
             count = 0
             for i in range(len(data)):
                 u = np.dot(self.weights, x_vals[i])
@@ -121,16 +62,12 @@ class Perceptron:
     def test(self, data):
         labels = data["label"]
         x = data.drop("label", axis=1)
-
         u = np.dot(x.values, self.weights)
         preds = np.where(u >= 0, 1, -1)
-
         error = np.sum(labels.values != preds)
         accuracy = 1 - (error / len(data))
-
         print(f"Test Accuracy: {accuracy:.4f}")
         self.plot_decision_boundary(x, labels, step="test")
-
         return accuracy
 
 
@@ -148,8 +85,8 @@ if __name__ == "__main__":
                 continue
 
             preprocessor = Perceptron()
-            df = preprocessor.preprocess(train_path)
-            df_test = preprocessor.preprocess(test_path)
+            df = preprocessor.load_df(train_path)
+            df_test = preprocessor.load_df(test_path)
 
             if i != 3:
                 model = Perceptron(f"Perceptron_DS{i}")

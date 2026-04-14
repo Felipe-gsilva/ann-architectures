@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from itertools import product
 import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
+from tqdm import tqdm
 
 DROPOUT_RATE = 0.1
 L2_LAMBDA = 0.001
@@ -249,6 +250,7 @@ class MLP(nn.Module):
         val_loss_history = []
         val_acc_history = []
 
+        pbar = tqdm(total=epochs, desc=f"Training {self.name}", unit="epoch")
         for e in range(epochs):
             epoch_loss = 0.0
             correct = 0
@@ -287,13 +289,14 @@ class MLP(nn.Module):
                 val_acc_history.append(val_acc)
                 nn.Module.train(self)
 
-            print(f"Epoch {e + 1}/{epochs} completed.")
+            pbar.update(1)
             if epochs_without_improvement >= self.patience:
                 print(
                     f"Early stopping triggered after {epochs_without_improvement + 1} epochs without improvement."
                 )
                 break
 
+        pbar.close()
         return train_loss_history, train_acc_history, val_loss_history, val_acc_history
 
     def evaluate(self, data: DataLoader) -> Tuple[float, float, Tuple]:
@@ -317,7 +320,7 @@ class MLP(nn.Module):
         f1, auc, acc = get_metrics(all_logits, all_labels, self.multiclass)
         avg_loss = loss / len(data)
 
-        print(f"Accuracy: {acc:.4f} | F1: {f1:.4f} | AUC: {auc:.4f}")
+        
         return avg_loss, acc, (f1, auc, acc)
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
@@ -331,13 +334,15 @@ class MLP(nn.Module):
         return predicted
 
 
-def main(path: str | List[str], batch_size=32):
+def main(path: str | List[str], batch_size=32, test_num=None):
     if isinstance(path, list) and len(path) == 3:
         (train_dataloader, val_dataloader, test_dataloader) = preprocess_know_paths(
             *path, batch_size=batch_size
         )
     elif isinstance(path, str):
-        (train_dataloader, val_dataloader, test_dataloader) = preprocess(path, batch_size=batch_size)
+        (train_dataloader, val_dataloader, test_dataloader) = preprocess(
+            path, batch_size=batch_size
+        )
     else:
         print(
             "Invalid path input. Please provide either a single CSV file path or three CSV file paths for train, val, and test."
@@ -393,6 +398,7 @@ def main(path: str | List[str], batch_size=32):
 
         results.append(
             {
+                "dataset_num": test_num,
                 "model": model_name,
                 "optimizer": h[0].__name__,
                 "architecture": str(h[1]),
@@ -402,6 +408,10 @@ def main(path: str | List[str], batch_size=32):
                 "test_acc": round(test_acc, 4),
                 "test_f1": round(f1, 4),
                 "test_auc": round(auc, 4),
+                "final_train_loss": round(train_loss[-1], 4),
+                "final_train_acc": round(train_acc[-1], 4),
+                "final_val_loss": round(val_loss[-1], 4) if val_loss else None,
+                "final_val_acc": round(val_acc[-1], 4) if val_acc else None,
             }
         )
 
@@ -448,8 +458,11 @@ if __name__ == "__main__":
                 "assets/test_dataset.csv",
             ],
         ]
+        i = 0
         for paths in test_paths:
-            main(paths, args.batch_size)
+            print(f"\nRunning test {i + 1} with paths: {paths}")
+            main(paths, args.batch_size, i)
+            i += 1
 
         exit(1)
 

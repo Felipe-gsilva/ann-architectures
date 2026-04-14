@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
 from typing import Tuple
 
+
 def create_ds_from_df(df: pd.DataFrame) -> torch.utils.data.TensorDataset:
     label = df["label"].values
     if any(label < 0):
@@ -90,6 +91,3 @@ class RegularizationType(enum.Enum):
     NONE = "none"
     DROPOUT = "dropout"
     L2 = "l2"
-
-
-
