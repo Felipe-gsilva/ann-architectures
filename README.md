@@ -1,8 +1,10 @@
 # ANN Architectures
 
-Repositório com implementações de:
-- **1 camada:** Perceptron e Adaline
-- **N camadas:** MLP
+Arquiteturas disponíveis neste repositório:
+- **Perceptron**
+- **Adaline**
+- **MLP**
+- **CNN**
 
 ## Objetivo do projeto
 
@@ -29,27 +31,45 @@ Com `uv`:
 uv sync
 ```
 
-## Execução do MLP (multilayer)
+## Padrão de estrutura de arquivos
+
+Para evitar repetição entre arquiteturas, o projeto segue este padrão:
+
+```sh
+src/models/
+├── simple/
+│   ├── perceptron.py
+│   └── adaline.py
+└── multilayer/
+    ├── MLP.py
+    └── CNN.py
+
+assets/
+└── <arquitetura>/
+    ├── *_results.csv
+    └── gráficos
+
+docs/
+└── <arquitetura>/
+    ├── <arquitetura>.tex
+    └── <arquitetura>.pdf
+```
+
+Onde:
+- o código-fonte dos modelos fica em `src/models/`
+- os resultados dos experimentos ficam em `assets/<arquitetura>/`
+- a documentação de cada arquitetura fica em `docs/<arquitetura>/`
+
+## Execução (exemplo com MLP)
 
 Da raiz do projeto:
 
 ```sh
-python models/multilayer/MLP.py --tests
+python src/models/multilayer/MLP.py --tests
 ```
 
 Ou com `uv`:
 
 ```sh
-uv run python models/multilayer/MLP.py --tests
+uv run python src/models/multilayer/MLP.py --tests
 ```
-
-Os resultados (CSV + gráficos) são gerados em `assets/mlp/`.
-
-Documentação detalhada do MLP: `models/multilayer/README.md`.
-
-## Relatórios e artefatos
-
-Os relatórios e gráficos gerados pelos modelos ficam na pasta `assets/`, em subpastas por arquitetura:
-- `assets/mlp/`: resultados do MLP (ex.: `*_results.csv` e gráficos de erro/acurácia/fronteira)
-- `assets/adaline/`: métricas e gráficos do Adaline
-- `assets/perceptron/`: métricas e gráficos do Perceptron
