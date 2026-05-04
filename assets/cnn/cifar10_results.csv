@@ -1,0 +1,2 @@
+model,optimizer,conv_layers,filters,dropout,test_loss,test_acc,epochs_run
+Adam_Conv3_Filt128_Drop0.1,Adam,3,128,0.1,0.9279,0.7609,11

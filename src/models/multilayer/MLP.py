@@ -1,6 +1,6 @@
-import enum
 from pathlib import Path
 from typing import List, Tuple
+from torch._C import uint16
 from torch.optim import SGD, Adam
 import torch.nn as nn
 import pandas as pd
@@ -10,8 +10,13 @@ import numpy as np
 from torch.utils.data import DataLoader
 from itertools import product
 import matplotlib.pyplot as plt
-from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
 from tqdm import tqdm
+from src.utils.utils import (
+    RegularizationType,
+    preprocess,
+    preprocess_know_paths,
+    get_metrics,
+)
 
 DROPOUT_RATE = 0.1
 L2_LAMBDA = 0.001
@@ -19,98 +24,11 @@ PATIENCE = 20
 EPOCHS = 100
 
 
-def create_ds_from_df(df: pd.DataFrame) -> torch.utils.data.TensorDataset:
-    label = df["label"].values
-    if any(label < 0):
-        label = (label > 0).astype(int)
-
-    return torch.utils.data.TensorDataset(
-        torch.tensor(df.drop("label", axis=1).values, dtype=torch.float32),
-        torch.tensor(label, dtype=torch.long),
-    )
-
-
-def preprocess(path, batch_size=32) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """Reads a CSV file and returns its train, validation and test subsets as dataloaders."""
-    dataset = pd.read_csv(path)
-    dataset = dataset.sample(frac=1).reset_index(drop=True)
-    train_size = int(0.7 * len(dataset))
-    val_size = int(0.15 * len(dataset))
-    train_df = dataset[:train_size]
-    val_df = dataset[train_size : train_size + val_size]
-    test_df = dataset[train_size + val_size :]
-
-    train_ds = create_ds_from_df(train_df)
-    val_ds = create_ds_from_df(val_df)
-    test_ds = create_ds_from_df(test_df)
-
-    train_loader = torch.utils.data.DataLoader(train_ds, batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_ds, batch_size, shuffle=False)
-    test_loader = torch.utils.data.DataLoader(test_ds, batch_size, shuffle=False)
-
-    return train_loader, val_loader, test_loader
-
-
-def preprocess_know_paths(
-    train_path, val_path, test_path, batch_size=32
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """Reads 3 given CSV files and returns their respective train, validation and test data as dataloaders."""
-    train_df = pd.read_csv(train_path)
-    val_df = pd.read_csv(val_path)
-    test_df = pd.read_csv(test_path)
-
-    train_ds = create_ds_from_df(train_df)
-    val_ds = create_ds_from_df(val_df)
-    test_ds = create_ds_from_df(test_df)
-
-    train_loader = torch.utils.data.DataLoader(train_ds, batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_ds, batch_size, shuffle=False)
-    test_loader = torch.utils.data.DataLoader(test_ds, batch_size, shuffle=False)
-
-    return train_loader, val_loader, test_loader
-
-
-def get_metrics(
-    logits: torch.Tensor,
-    labels: torch.Tensor,
-    multiclass: bool,
-) -> Tuple[float, float, float]:
-    """
-    Calculates f1 (weighted), roc_auc (weighted) and accuracy.
-
-    Args:
-        logits: raw model outputs (before softmax/sigmoid), shape (N, C) or (N, 1)
-        labels: ground-truth class indices, shape (N,)
-        multiclass: True for CrossEntropy problems, False for binary BCE
-    """
-    labels_np = labels.cpu().numpy()
-
-    if multiclass:
-        probs = torch.softmax(logits, dim=1).cpu().numpy()
-        preds = probs.argmax(axis=1)
-        auc = roc_auc_score(labels_np, probs, average="weighted", multi_class="ovr")
-    else:
-        probs = torch.sigmoid(logits).squeeze().cpu().numpy()
-        preds = (probs >= 0.5).astype(int)
-        auc = roc_auc_score(labels_np, probs, average="weighted")
-
-    f1 = f1_score(labels_np, preds, average="weighted")
-    acc = accuracy_score(labels_np, preds)
-
-    return f1, auc, acc
-
-
-class RegularizationType(enum.Enum):
-    NONE = "none"
-    DROPOUT = "dropout"
-    L2 = "l2"
-
-
 class MLP(nn.Module):
     def __init__(
         self,
         name: str,
-        layers: List[torch.uint16],
+        layers: List[uint16],
         optimizer=SGD,
         activation_fn: nn.Module = nn.ReLU,
         regularization: RegularizationType = RegularizationType.NONE,
@@ -133,7 +51,7 @@ class MLP(nn.Module):
 
     def init_hidden_layers(
         self,
-        shape_list: List[torch.uint16],
+        shape_list: List[uint16],
         activation_fn: nn.Module = nn.ReLU,
         regularization: RegularizationType = RegularizationType.NONE,
     ) -> List[nn.Sequential]:
@@ -251,7 +169,7 @@ class MLP(nn.Module):
         val_acc_history = []
 
         pbar = tqdm(total=epochs, desc=f"Training {self.name}", unit="epoch")
-        for e in range(epochs):
+        for _ in range(epochs):
             epoch_loss = 0.0
             correct = 0
             total = 0
@@ -320,7 +238,6 @@ class MLP(nn.Module):
         f1, auc, acc = get_metrics(all_logits, all_labels, self.multiclass)
         avg_loss = loss / len(data)
 
-        
         return avg_loss, acc, (f1, auc, acc)
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
