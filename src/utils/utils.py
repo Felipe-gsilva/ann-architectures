@@ -8,6 +8,7 @@ from typing import Tuple
 
 def create_ds_from_df(df: pd.DataFrame) -> torch.utils.data.TensorDataset:
     label = df["label"].values
+    
     if any(label < 0):
         label = (label > 0).astype(int)
 
@@ -84,7 +85,7 @@ def get_metrics(
     f1 = f1_score(labels_np, preds, average="weighted")
     acc = accuracy_score(labels_np, preds)
 
-    return f1, auc, acc
+    return f1, float(auc), acc
 
 
 class RegularizationType(enum.Enum):

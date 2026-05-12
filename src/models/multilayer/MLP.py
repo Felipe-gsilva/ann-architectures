@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import List, Tuple
-from torch._C import uint16
+from torch import uint16
 from torch.optim import SGD, Adam
 import torch.nn as nn
 import pandas as pd
@@ -162,6 +162,7 @@ class MLP(nn.Module):
     ) -> Tuple[List[float], List[float], List[float], List[float]]:
         nn.Module.train(self)
         best_loss = float("inf")
+        best_epoch = 0
         epochs_without_improvement = 0
         train_loss_history = []
         train_acc_history = []
@@ -199,7 +200,9 @@ class MLP(nn.Module):
                 val_loss, val_acc, _ = self.evaluate(val_df)
                 if val_loss < best_loss:
                     best_loss = val_loss
+                    best_epoch = len(train_loss_history)
                     epochs_without_improvement = 0
+                    torch.save(self.state_dict(), f"best_model_{self.name}_epoch_{best_epoch}.pth")
                 else:
                     epochs_without_improvement += 1
 
@@ -212,6 +215,7 @@ class MLP(nn.Module):
                 print(
                     f"Early stopping triggered after {epochs_without_improvement + 1} epochs without improvement."
                 )
+                torch.load(self.state_dict(), f"best_model_{self.name}_epoch_{best_epoch}.pth")
                 break
 
         pbar.close()
